@@ -1,1 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <!-- 终极移动端适配，完美兼容各种安卓机型、微信/QQ内置浏览器 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="x5-fullscreen" content="true">
+    <meta name="x5-page-mode" content="app">
+    
+    <title>Nexus AI - 智能系统</title>
+
+    <!-- 核心库全部替换为全球最快、防屏蔽的稳定 CDN 节点 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.279.0/umd/lucide.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.17/babel.min.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-app-compat.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-firestore-compat.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-auth-compat.min.js"></script>
+
+    <style>
+        body { 
+            background-color: #09090b; 
+            color: white; 
+            -webkit-tap-highlight-color: transparent; 
+            overscroll-behavior-y: none; /* 防止页面被意外下拉拖拽 */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        /* 适配刘海屏和底部小黑条 */
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
+        .pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+        
+        /* 强制手机输入框不缩放，保持界面稳定 */
+        input, textarea { 
+            font-size: 16px !important; 
+            line-height: normal;
+        }
+        
+        /* 隐藏滚动条但保留滚动功能 */
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <!-- 初始加载动画，网速慢时的兜底显示 -->
+        <div style="height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #09090b; color: #71717a;">
+            <div style="width: 40px; height: 40px; border: 3px solid #27272a; border-top-color: #4f46e5; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            <p style="margin-top: 20px; font-size: 14px; letter-spacing: 2px;">连接核心网络...</p>
+            <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+        </div>
+    </div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // ==========================================
+        // 你的专属 Firebase 密钥
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBAxYsXa51rHYE8l43qnUsn9fBNdfQMIho",
+            authDomain: "my-love-33128.firebaseapp.com",
+            projectId: "my-love-33128",
+            storageBucket: "my-love-33128.firebasestorage.app",
+            messagingSenderId: "635718475205",
+            appId: "1:635718475205:web:669f300663b0102b3fffac"
+        };
+
+        // 安全初始化，防止旧版手机报错
+        let db, auth;
+        try {
+            if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+            auth = firebase.auth();
+        } catch (error) {
+            console.error("Firebase 初始化失败", error);
+        }
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [isError, setIsError] = useState(false);
+            const [path, setPath] = useState(window.location.hash || '#/');
+            const [activeSid, setActiveSid] = useState(null);
+            const [sessions, setSessions] = useState([]);
+            const [chat, setChat] = useState(null);
+            const [input, setInput] = useState('');
+            const [isUnlocked, setIsUnlocked] = useState(false);
+            const [pass, setPass] = useState('');
+            const chatEndRef = useRef(null);
+
+            // 1. 初始化登录与路由
+            useEffect(() => {
+                const handleHash = () => setPath(window.location.hash || '#/');
+                window.addEventListener('hashchange', handleHash);
+                
+                if (auth) {
+                    auth.signInAnonymously()
+                        .then(res => setUser(res.user))
+                        .catch(err => {
+                            console.error("登录失败:", err);
+                            setIsError(true);
+                        });
+                } else {
+                    setIsError(true);
+                }
+                return () => window.removeEventListener('hashchange', handleHash);
+            }, []);
+
+            const isAdmin = path === '#/admin';
+
+            // 2. 访客端：专属数据流
+            useEffect(() => {
+                if (!user || isAdmin || !db) return;
+                const sid = `session_${user.uid}`;
+                setActiveSid(sid);
+                const unsub = db.collection('chats').doc(sid).onSnapshot(doc => {
+                    if (doc.exists) {
+                        setChat(doc.data());
+                    } else {
+                        // 首次访问自动发问候语
+                        doc.ref.set({ 
+                            id: sid, 
+                            messages: [{role:'ai', content:'连接成功。我是您的专属 AI 助理，随时可以开始交流。', ts:Date.now()}], 
+                            lastUpdate: Date.now() 
+                        }).catch(() => setIsError(true));
+                    }
+                }, () => setIsError(true));
+                return unsub;
+            }, [user, isAdmin]);
+
+            // 3. 管理端：获取所有访客列表
+            useEffect(() => {
+                if (!user || !isAdmin || !isUnlocked || !db) return;
+                const unsub = db.collection('chats').onSnapshot(snap => {
+                    const list = snap.docs.map(d => d.data());
+                    setSessions(list.sort((a,b) => b.lastUpdate - a.lastUpdate)); // 按最新时间排序
+                });
+                return unsub;
+            }, [user, isAdmin, isUnlocked]);
+
+            // 4. 管理端：监听特定聊天
+            useEffect(() => {
+                if (!isAdmin || !activeSid || !isUnlocked || !db) return;
+                const unsub = db.collection('chats').doc(activeSid).onSnapshot(doc => {
+                    if (doc.exists) setChat(doc.data());
+                });
+                return unsub;
+            }, [activeSid, isUnlocked]);
+
+            // 5. 自动滚动到底部 (针对安卓键盘弹出的延迟优化)
+            useEffect(() => { 
+                setTimeout(() => {
+                    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); 
+                }, 150);
+            }, [chat?.messages]);
+
+            // 6. 发送消息功能
+            const send = async (e) => {
+                e?.preventDefault();
+                if (!input.trim() || !activeSid || !db) return;
+                
+                const msg = { role: isAdmin ? 'ai' : 'user', content: input.trim(), ts: Date.now() };
+                const tempInput = input; 
+                setInput(''); // 先清空提升流畅度
+                
+                try {
+                    await db.collection('chats').doc(activeSid).update({
+                        messages: firebase.firestore.FieldValue.arrayUnion(msg),
+                        lastUpdate: Date.now()
+                    });
+                } catch(err) { 
+                    setInput(tempInput); // 失败恢复内容
+                    alert("发送失败，请检查网络连接或数据库权限"); 
+                }
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+            };
+
+            // ==========================================
+            // 异常兜底界面 (被墙/网卡/配置错时显示)
+            // ==========================================
+            if (isError) {
+                return (
+                    <div className="h-screen h-[100dvh] w-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 font-sans absolute inset-0">
+                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl w-full max-w-sm shadow-2xl">
+                            <div className="w-16 h-16 bg-red-900/20 rounded-full flex items-center justify-center mx-auto mb-4"><i data-lucide="wifi-off" className="text-red-500 w-8 h-8"></i></div>
+                            <h2 className="text-white font-bold mb-3 text-lg">网络连接受限</h2>
+                            <p className="text-sm text-zinc-400 mb-6 leading-relaxed">当前手机网络拦截了通信组件，或您的 Firebase 权限未完全开放。</p>
+                            <button onClick={()=>window.location.reload()} className="bg-indigo-600 text-white w-full py-3.5 rounded-xl font-bold active:bg-indigo-700 transition-colors shadow-lg shadow-indigo-500/20">尝试重新连接</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!user) return null; // 保持外部 HTML 动画渲染
+
+            // ==========================================
+            // 视图 A：普通访客界面 (高端深色风)
+            // ==========================================
+            if (!isAdmin) {
+                return (
+                    <div className="flex flex-col h-[100dvh] w-full bg-zinc-950 absolute inset-0 overflow-hidden font-sans">
+                        <header className="px-5 py-3 pt-safe border-b border-zinc-800 flex items-center gap-3 bg-zinc-950/90 backdrop-blur-md shrink-0 z-10 shadow-sm">
+                            <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                                <i data-lucide="bot" className="text-white w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <h1 className="font-bold text-[16px] text-white leading-tight tracking-tight">Nexus AI</h1>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div>
+                                    <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">System Online</span>
+                                </div>
+                            </div>
+                        </header>
+                        
+                        <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-5 webkit-overflow-scrolling-touch">
+                            <div className="max-w-2xl mx-auto space-y-5">
+                                {chat?.messages.map((m, i) => (
+                                    <div key={i} className={`flex ${m.role==='user'?'justify-end':'justify-start'} animate-in fade-in duration-300 slide-in-from-bottom-2`}>
+                                        <div className={`p-4 rounded-3xl max-w-[85%] text-[15px] leading-[1.6] shadow-sm ${
+                                            m.role==='user' 
+                                            ? 'bg-indigo-600 text-white rounded-br-sm' 
+                                            : 'bg-zinc-800 text-zinc-100 rounded-bl-sm border border-zinc-700/50'
+                                        }`}>
+                                            <span className="whitespace-pre-wrap break-words">{m.content}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                                <div ref={chatEndRef} className="h-4" />
+                            </div>
+                        </main>
+                        
+                        <footer className="p-3 md:p-4 bg-zinc-950/90 backdrop-blur-md border-t border-zinc-800 pb-safe shrink-0">
+                            <form onSubmit={send} className="max-w-2xl mx-auto w-full flex gap-2 items-end">
+                                <textarea 
+                                    value={input} 
+                                    onChange={e=>setInput(e.target.value)} 
+                                    onKeyDown={handleKeyDown} 
+                                    placeholder="输入消息..." 
+                                    className="flex-1 bg-zinc-800/80 border border-zinc-700 rounded-2xl px-5 py-3.5 outline-none focus:ring-2 focus:ring-indigo-500/50 text-[16px] resize-none h-[54px] max-h-[120px] transition-all placeholder:text-zinc-500" 
+                                    rows="1" 
+                                />
+                                <button 
+                                    type="submit" 
+                                    disabled={!input.trim()} 
+                                    className="w-[54px] h-[54px] bg-indigo-600 rounded-2xl flex items-center justify-center shrink-0 disabled:opacity-50 active:scale-95 transition-all shadow-lg shadow-indigo-500/20"
+                                >
+                                    <i data-lucide="send" className="text-white ml-1 w-5 h-5"></i>
+                                </button>
+                            </form>
+                        </footer>
+                    </div>
+                );
+            }
+
+            // ==========================================
+            // 视图 B：管理员验证锁
+            // ==========================================
+            if (isAdmin && !isUnlocked) {
+                return (
+                    <div className="h-[100dvh] w-full flex items-center justify-center bg-black p-4 absolute inset-0 font-sans">
+                        <form onSubmit={e=>{e.preventDefault(); if(pass==='admin888') setIsUnlocked(true); else { alert('密码错误'); setPass(''); }}} className="bg-zinc-900 p-8 rounded-[32px] w-full max-w-xs text-center border border-zinc-800 shadow-2xl animate-in zoom-in-95">
+                            <div className="w-16 h-16 bg-zinc-800 border border-zinc-700 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner"><i data-lucide="shield-alert" className="text-indigo-400 w-8 h-8"></i></div>
+                            <h2 className="text-white font-bold mb-2 text-[18px] tracking-tight">安全拦截区</h2>
+                            <p className="text-zinc-500 text-[12px] mb-8">只有主人才能接管系统</p>
+                            <input 
+                                type="password" 
+                                value={pass} 
+                                onChange={e=>setPass(e.target.value)} 
+                                placeholder="输入密码" 
+                                className="w-full bg-black border border-zinc-800 rounded-2xl p-4 text-white mb-5 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-center text-[16px] tracking-widest placeholder:tracking-normal" 
+                            />
+                            <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl active:scale-95 transition-transform text-[16px] shadow-lg shadow-indigo-600/20">强制接管</button>
+                        </form>
+                    </div>
+                );
+            }
+
+            // ==========================================
+            // 视图 C：管理员真正的后台工作台
+            // ==========================================
+            return (
+                <div className="flex flex-col md:flex-row h-[100dvh] w-full bg-zinc-50 text-zinc-900 overflow-hidden absolute inset-0 font-sans">
+                    
+                    {/* 左侧：猎物列表 */}
+                    <aside className={`${activeSid ? 'hidden md:flex' : 'flex'} w-full md:w-80 flex-col border-r border-zinc-200 bg-white shrink-0 h-full`}>
+                        <header className="p-4 pt-safe bg-zinc-900 text-white flex justify-between items-center shrink-0 shadow-md z-10">
+                            <div className="flex items-center gap-2"><i data-lucide="radar" className="text-emerald-400 w-5 h-5"></i><span className="font-bold text-[16px] tracking-tight">猎物雷达</span></div>
+                            <button onClick={()=>setIsUnlocked(false)} className="p-2 text-zinc-400 hover:text-white transition-colors" title="锁定"><i data-lucide="lock" className="w-4 h-4"></i></button>
+                        </header>
+                        
+                        <div className="p-2 bg-zinc-100 border-b border-zinc-200 text-[10px] font-bold text-zinc-500 uppercase text-center tracking-widest shrink-0">
+                            已捕获信号源
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto webkit-overflow-scrolling-touch">
+                            {sessions.length === 0 ? (
+                                <div className="p-10 flex flex-col items-center text-zinc-400 space-y-3"><i data-lucide="scan" className="w-10 h-10 opacity-30 animate-pulse"></i><p className="text-sm font-medium">雷达静默，等待猎物...</p></div> 
+                            ) : (
+                                sessions.map(s => (
+                                    <button 
+                                        key={s.id} 
+                                        onClick={()=>setActiveSid(s.id)} 
+                                        className={`w-full p-4 text-left border-b flex gap-3 transition-colors ${activeSid === s.id ? 'bg-indigo-50 border-l-4 border-zinc-200 border-l-indigo-600' : 'active:bg-zinc-50 border-zinc-100 border-l-4 border-transparent'}`}
+                                    >
+                                        <div className="w-11 h-11 bg-white border border-zinc-200 rounded-full flex items-center justify-center shrink-0 text-zinc-400 shadow-sm mt-0.5"><i data-lucide="user" className="w-5 h-5"></i></div>
+                                        <div className="overflow-hidden flex-1">
+                                            <div className="flex justify-between items-baseline mb-1">
+                                                <p className="font-bold text-[14px] text-zinc-800 truncate">访客 {s.id.slice(-4)}</p>
+                                                <span className="text-[10px] text-zinc-400 font-medium">{new Date(s.lastUpdate).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                            </div>
+                                            <p className="text-[12px] text-zinc-500 truncate leading-tight">{s.messages[s.messages.length-1]?.content || '无消息'}</p>
+                                        </div>
+                                    </button>
+                                ))
+                            )}
+                        </div>
+                    </aside>
+
+                    {/* 右侧：实施伪装区 */}
+                    <main className={`${!activeSid ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-zinc-100 relative h-full`}>
+                        {activeSid && (
+                            <>
+                                <header className="p-3 md:p-4 pt-safe border-b border-zinc-200 flex items-center gap-3 bg-white shrink-0 shadow-sm z-10 sticky top-0">
+                                    <button onClick={()=>setActiveSid(null)} className="md:hidden p-2 -ml-2 text-zinc-500 active:bg-zinc-100 rounded-full"><i data-lucide="arrow-left" className="w-6 h-6"></i></button>
+                                    <div className="w-10 h-10 bg-zinc-900 text-white rounded-xl flex items-center justify-center font-bold text-[12px] shrink-0 shadow-inner">AI</div>
+                                    <div className="flex-1 overflow-hidden">
+                                        <p className="font-bold text-[15px] text-zinc-800 truncate leading-tight">伪装目标：{activeSid.slice(-4)}</p>
+                                        <div className="flex items-center gap-1.5 mt-0.5"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.8)]"></div><span className="text-[10px] text-emerald-600 font-bold uppercase tracking-widest">Masking Active</span></div>
+                                    </div>
+                                </header>
+
+                                <div className="flex-1 overflow-y-auto p-4 space-y-4 webkit-overflow-scrolling-touch bg-zinc-50/50">
+                                    <div className="max-w-3xl mx-auto space-y-4">
+                                        {chat?.messages.map((m, i) => (
+                                            <div key={i} className={`flex ${m.role==='user'?'justify-start':'justify-end'}`}>
+                                                <div className={`p-4 rounded-3xl max-w-[85%] text-[15px] leading-[1.6] shadow-sm ${
+                                                    m.role==='user' 
+                                                    ? 'bg-white border border-zinc-200 text-zinc-800 rounded-bl-sm' 
+                                                    : 'bg-zinc-900 text-white rounded-br-sm'
+                                                }`}>
+                                                    <div className="text-[10px] font-bold uppercase opacity-40 mb-1.5 tracking-wider">{m.role==='user' ? '对方发来' : '你发出的伪装'}</div>
+                                                    <span className="whitespace-pre-wrap break-words">{m.content}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div ref={chatEndRef} className="h-4" />
+                                    </div>
+                                </div>
+
+                                <footer className="p-3 md:p-4 bg-white border-t border-zinc-200 pb-safe shrink-0 shadow-[0_-4px_15px_rgba(0,0,0,0.03)]">
+                                    <form onSubmit={send} className="max-w-3xl mx-auto flex gap-2 md:gap-3 items-end">
+                                        <textarea 
+                                            value={input} 
+                                            onChange={e=>setInput(e.target.value)} 
+                                            onKeyDown={handleKeyDown} 
+                                            placeholder="输入你要伪装的 AI 回复..." 
+                                            className="flex-1 bg-zinc-100 border border-zinc-200 p-4 rounded-2xl resize-none h-[54px] max-h-[120px] outline-none focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-900 text-[16px] transition-all" 
+                                            rows="1" 
+                                        />
+                                        <button 
+                                            type="submit" 
+                                            disabled={!input.trim()} 
+                                            className="w-[54px] h-[54px] md:w-16 shrink-0 bg-zinc-900 text-white rounded-2xl flex items-center justify-center disabled:opacity-50 active:scale-95 transition-all shadow-lg shadow-black/10"
+                                        >
+                                            <i data-lucide="send" className="w-5 h-5 ml-1"></i>
+                                        </button>
+                                    </form>
+                                </footer>
+                            </>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+        
+        // 处理图标渲染的兼容性
+        const renderIcons = () => { if (window.lucide) window.lucide.createIcons(); };
+        setTimeout(renderIcons, 300);
+        window.addEventListener('hashchange', () => setTimeout(renderIcons, 100));
+    </script>
+</body>
+</html>
+
 
